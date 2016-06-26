@@ -199,18 +199,22 @@ JNIEXPORT jlong JNICALL Java_org_apache_hadoop_crypto_OpensslCipher_init
     (JNIEnv *env, jobject object, jlong ctx, jint mode, jint alg, jint padding, 
     jbyteArray key, jbyteArray iv)
 {
+  jlong result = 0L;
+  EVP_CIPHER_CTX *context = CONTEXT(ctx);
+
+  jbyte *jKey = NULL;
+  jbyte *jIv  = NULL;
   int jKeyLen = (*env)->GetArrayLength(env, key);
   int jIvLen = (*env)->GetArrayLength(env, iv);
   if (jKeyLen != KEY_LENGTH_128 && jKeyLen != KEY_LENGTH_256) {
     THROW(env, "java/lang/IllegalArgumentException", "Invalid key length.");
-    return (jlong)0;
+    goto cleanup;
   }
   if (jIvLen != IV_LENGTH) {
     THROW(env, "java/lang/IllegalArgumentException", "Invalid iv length.");
-    return (jlong)0;
+    goto cleanup;
   }
-  
-  EVP_CIPHER_CTX *context = CONTEXT(ctx);
+
   if (context == 0) {
     // Create and initialize a EVP_CIPHER_CTX
     context = dlsym_EVP_CIPHER_CTX_new();
@@ -220,33 +224,48 @@ JNIEXPORT jlong JNICALL Java_org_apache_hadoop_crypto_OpensslCipher_init
     }
   }
   
-  jbyte *jKey = (*env)->GetByteArrayElements(env, key, NULL);
+  jKey = (*env)->GetByteArrayElements(env, key, NULL);
   if (jKey == NULL) {
     THROW(env, "java/lang/InternalError", "Cannot get bytes array for key.");
-    return (jlong)0;
+    goto cleanup;
   }
-  jbyte *jIv = (*env)->GetByteArrayElements(env, iv, NULL);
+  jIv = (*env)->GetByteArrayElements(env, iv, NULL);
   if (jIv == NULL) {
-    (*env)->ReleaseByteArrayElements(env, key, jKey, 0);
     THROW(env, "java/lang/InternalError", "Cannot get bytes array for iv.");
-    return (jlong)0;
+    goto cleanup;
   }
   
   int rc = dlsym_EVP_CipherInit_ex(context, getEvpCipher(alg, jKeyLen),  \
       NULL, (unsigned char *)jKey, (unsigned char *)jIv, mode == ENCRYPT_MODE);
-  (*env)->ReleaseByteArrayElements(env, key, jKey, 0);
-  (*env)->ReleaseByteArrayElements(env, iv, jIv, 0);
+
   if (rc == 0) {
-    dlsym_EVP_CIPHER_CTX_cleanup(context);
     THROW(env, "java/lang/InternalError", "Error in EVP_CipherInit_ex.");
-    return (jlong)0;
+    goto cleanup;
   }
   
   if (padding == NOPADDING) {
     dlsym_EVP_CIPHER_CTX_set_padding(context, 0);
   }
-  
-  return JLONG(context);
+
+  // everything is OK,
+  result = JLONG(context);
+
+cleanup:
+  if (result == 0 && context != NULL) {
+    if (CONTEXT(ctx) != NULL) {
+      dlsym_EVP_CIPHER_CTX_cleanup(context);
+    } else {
+      dlsym_EVP_CIPHER_CTX_free(context);
+    }
+  }
+  if (jKey != NULL) {
+    (*env)->ReleaseByteArrayElements(env, key, jKey, 0);
+  }
+  if (jIv != NULL) {
+    (*env)->ReleaseByteArrayElements(env, iv, jIv, 0);
+  }
+
+  return result;
 }
 
 // https://www.openssl.org/docs/crypto/EVP_EncryptInit.html
